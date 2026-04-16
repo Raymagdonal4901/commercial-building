@@ -3,6 +3,18 @@
 // =========================================
 const API_URL = '/api';
 
+// DOM Elements
+const galleryGrid = document.getElementById('gallery-grid');
+const lightbox = document.getElementById('lightbox');
+const lightboxImg = document.getElementById('lightbox-img');
+const lightboxClose = document.getElementById('lightbox-close');
+const lightboxPrev = document.getElementById('lightbox-prev');
+const lightboxNext = document.getElementById('lightbox-next');
+const lightboxCurrent = document.getElementById('lightbox-current');
+const lightboxTotal = document.getElementById('lightbox-total');
+const lightboxDelete = document.getElementById('lightbox-delete');
+const lightboxOverlay = document.querySelector('.lightbox-overlay');
+
 async function fetchSiteContent() {
     try {
         const res = await fetch(`${API_URL}/content`);
@@ -292,10 +304,9 @@ function animateCounter(element, target, suffix = '') {
     requestAnimationFrame(update);
 }
 
-// =========================================
-// Photo Gallery — Upload & Display (API-based)
-// =========================================
-const galleryGrid = document.getElementById('gallery-grid');
+// = ::::::::::::::::::::::::::::::::::::::::
+// Photo Gallery — Display Logic
+// = ::::::::::::::::::::::::::::::::::::::::
 
 function addGalleryItem(dataUrl, animated = true) {
     const url = typeof dataUrl === 'object' && dataUrl !== null ? (dataUrl.url || dataUrl.image || dataUrl.src || '') : dataUrl;
@@ -332,16 +343,6 @@ if (firstGalleryChild) {
 // =========================================
 // Lightbox (API-based sync)
 // =========================================
-const lightbox = document.getElementById('lightbox');
-const lightboxImg = document.getElementById('lightbox-img');
-const lightboxClose = document.getElementById('lightbox-close');
-const lightboxPrev = document.getElementById('lightbox-prev');
-const lightboxNext = document.getElementById('lightbox-next');
-const lightboxCurrent = document.getElementById('lightbox-current');
-const lightboxTotal = document.getElementById('lightbox-total');
-const lightboxDelete = document.getElementById('lightbox-delete');
-const lightboxOverlay = lightbox.querySelector('.lightbox-overlay');
-
 let currentLightboxIndex = 0;
 
 function getAllGalleryItems() { return Array.from(galleryGrid.querySelectorAll('.gallery-item')); }
