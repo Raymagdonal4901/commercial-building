@@ -308,13 +308,15 @@ function animateCounter(element, target, suffix = '') {
 // Photo Gallery — Display Logic
 // = ::::::::::::::::::::::::::::::::::::::::
 
-function addGalleryItem(dataUrl, animated = true) {
-    const url = typeof dataUrl === 'object' && dataUrl !== null ? (dataUrl.url || dataUrl.image || dataUrl.src || '') : dataUrl;
+function addGalleryItem(imgData, animated = true) {
+    const url = imgData.url || imgData;
+    const id = imgData.id || '';
     if (!url) return;
     
     const item = document.createElement('div');
     item.className = 'gallery-item';
     item.setAttribute('data-src', url);
+    item.setAttribute('data-id', id);
     
     if (animated) item.classList.add('animate-fade-up');
     else item.classList.add('visible');
@@ -410,11 +412,12 @@ lightboxDelete.addEventListener('click', async () => {
         const token = localStorage.getItem('admin_token');
         if (!token) return alert('Unauthorized');
 
-        // Gallery index in DB is index - 1 (since index 0 is hero)
-        const dbIndex = currentLightboxIndex - 1;
+        // Use the ID stored in data-id
+        const id = item.getAttribute('data-id');
+        if (!id) return alert('Cannot delete legacy image this way');
         
         try {
-            const res = await fetch(`${API_URL}/gallery/${dbIndex}`, {
+            const res = await fetch(`${API_URL}/gallery/${id}`, {
                 method: 'DELETE',
                 headers: { 'Authorization': `Bearer ${token}` }
             });

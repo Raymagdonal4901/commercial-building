@@ -3,12 +3,39 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
+const multer = require('multer');
 const SiteContent = require('./models/SiteContent');
+const GalleryImage = require('./models/GalleryImage');
+const fs = require('fs');
+
+// Configure Multer for disk storage to prevent OOM (Out Of Memory) crashes
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, 'temp_uploads/');
+    },
+    filename: function (req, file, cb) {
+        cb(null, Date.now() + '-' + file.originalname);
+    }
+});
+
+const upload = multer({ 
+    storage: storage,
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+});
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Global Error Catching
+process.on('uncaughtException', (err) => {
+    console.error('🔥 UNCAUGHT EXCEPTION:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('🔥 UNHANDLED REJECTION at:', promise, 'reason:', reason);
+});
 
 // =========================================
 // Serve HTML pages (Move above static for precedence)
@@ -106,7 +133,16 @@ function requireAuth(req, res, next) {
 app.get('/api/content', async (req, res) => {
     try {
         const content = await getContent();
-        res.json(content);
+        const galleryImages = await GalleryImage.find().sort({ createdAt: 1 });
+        
+        // Return combined data format
+        const response = content.toObject();
+        response.galleryImages = galleryImages.map(img => ({
+            id: img._id,
+            url: img.image
+        }));
+        
+        res.json(response);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -157,45 +193,60 @@ app.put('/api/content', requireAuth, async (req, res) => {
         const content = await SiteContent.findOneAndUpdate(
             {},
             { $set: req.body },
-            { returnDocument: 'after', upsert: true }
+            { returnDocument: 'after', upsert: true } // Added upsert: true
         );
+        if (!content) throw new Error('Failed to update/create content');
         console.log('✅ Content updated successfully');
         res.json(content);
     } catch (error) {
-        console.error('❌ Save error:', error);
+        console.error('❌ Update error:', error);
         res.status(500).json({ error: error.message });
     }
 });
 
-// Upload gallery image as base64 (protected)
-app.post('/api/gallery', requireAuth, async (req, res) => {
+// Upload gallery image using Multer (protected)
+app.post('/api/gallery', requireAuth, upload.single('image'), async (req, res) => {
+    let filePath = '';
     try {
-        const { image } = req.body; // base64 data URL
-        if (!image) return res.status(400).json({ error: 'No image provided' });
+        console.log('🖼️ Received individual gallery image upload');
+        if (!req.file) return res.status(400).json({ error: 'No image provided' });
 
-        const content = await SiteContent.findOneAndUpdate(
-            {},
-            { $push: { galleryImages: image } },
-            { returnDocument: 'after' }
-        );
-        res.json({ galleryImages: content.galleryImages });
+        filePath = req.file.path;
+        
+        // Read file and convert to base64
+        const fileBuffer = fs.readFileSync(filePath);
+        const base64 = `data:${req.file.mimetype};base64,${fileBuffer.toString('base64')}`;
+
+        // Save as a separate document
+        const newImage = await GalleryImage.create({
+            image: base64
+        });
+        
+        console.log(`✅ Image saved to separate collection: ${newImage._id}`);
+        
+        // Cleanup temp file
+        fs.unlinkSync(filePath);
+        
+        // Return updated list
+        const galleryImages = await GalleryImage.find().sort({ createdAt: 1 });
+        res.json({ galleryImages: galleryImages.map(img => ({ id: img._id, url: img.image })) });
     } catch (error) {
+        console.error('❌ Upload error:', error);
+        if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
         res.status(500).json({ error: error.message });
     }
 });
 
-// Delete gallery image (protected)
-app.delete('/api/gallery/:index', requireAuth, async (req, res) => {
+// Delete gallery image by ID (protected)
+app.delete('/api/gallery/:id', requireAuth, async (req, res) => {
     try {
-        const content = await getContent();
-        const idx = parseInt(req.params.index);
-        if (idx < 0 || idx >= content.galleryImages.length) {
-            return res.status(400).json({ error: 'Invalid index' });
-        }
-        content.galleryImages.splice(idx, 1);
-        await content.save();
-        res.json({ galleryImages: content.galleryImages });
+        const { id } = req.params;
+        await GalleryImage.findByIdAndDelete(id);
+        
+        const galleryImages = await GalleryImage.find().sort({ createdAt: 1 });
+        res.json({ galleryImages: galleryImages.map(img => ({ id: img._id, url: img.image })) });
     } catch (error) {
+        console.error('❌ Delete error:', error);
         res.status(500).json({ error: error.message });
     }
 });

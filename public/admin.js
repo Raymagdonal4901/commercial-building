@@ -47,13 +47,17 @@ async function saveContent() {
         // Gather data from forms
         gatherFormData();
         
+        // Omit galleryImages to prevent massive payloads since they are handled independently
+        const payloadToSave = { ...siteContent };
+        delete payloadToSave.galleryImages;
+        
         const res = await fetch(`${API_URL}/content`, {
             method: 'PUT',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${authToken}`
             },
-            body: JSON.stringify(siteContent)
+            body: JSON.stringify(payloadToSave)
         });
         
         if (!res.ok) {
@@ -277,14 +281,16 @@ function renderGallery(images) {
     // Actually, hero image is static for now. If we want it editable, we should add it.
     // For now we just show uploaded gallery images.
     images.forEach((imgData, i) => {
-        const url = typeof imgData === 'object' && imgData !== null ? (imgData.url || imgData.image || imgData.src || '') : imgData;
+        // imgData is now { id, url }
+        const url = imgData.url || imgData;
+        const id = imgData.id || i; // Fallback to index if legacy string
         if (!url) return;
 
         const el = document.createElement('div');
         el.className = 'admin-gallery-item';
         el.innerHTML = `
-            <img src="${url}" alt="Gallery ${i}">
-            <button class="gallery-remove" onclick="deleteGalleryImage(${i})" title="ลบภาพนี้">
+            <img src="${url}" alt="Gallery">
+            <button class="gallery-remove" onclick="deleteGalleryImage('${id}')" title="ลบภาพนี้">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
             </button>
         `;
@@ -359,39 +365,73 @@ adminFileInput.addEventListener('change', (e) => {
     adminFileInput.value = '';
 });
 
-function handleAdminUpload(files) {
+async function handleAdminUpload(files) {
+    console.log('🔰 handleAdminUpload started with', files.length, 'files');
+    alert('ระบบได้รับคำสั่งอัปโหลดแล้ว จำนวน: ' + files.length + ' ไฟล์');
+    
     const validTypes = ['image/jpeg', 'image/png', 'image/webp'];
     const validFiles = Array.from(files).filter(f => validTypes.includes(f.type));
     
-    if (validFiles.length === 0) return;
+    if (validFiles.length === 0) {
+        alert('กรุณาเลือกไฟล์ภาพ (JPG, PNG, WEBP) เท่านั้น');
+        return;
+    }
     
-    // Simply read as base64 and upload via API
-    // Actually, saving base64 directly to MongoDB is fine for this use case since we set 50mb limit
-    validFiles.forEach(file => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            resizeImage(e.target.result, 1200, async (base64) => {
-                try {
-                    const res = await fetch(`${API_URL}/gallery`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${authToken}`
-                        },
-                        body: JSON.stringify({ image: base64 })
-                    });
-                    if (res.ok) {
-                        const data = await res.json();
-                        siteContent.galleryImages = data.galleryImages;
-                        renderGallery(siteContent.galleryImages);
-                    }
-                } catch (err) {
-                    console.error('Gallery upload failed', err);
-                }
+    // Show a loading indicator if needed, but for now just log
+    console.log('✅ Found', validFiles.length, 'valid images');
+
+    // Use a sequential loop to avoid slamming the server with multiple large requests at once
+    for (let i = 0; i < validFiles.length; i++) {
+        const file = validFiles[i];
+        try {
+            const base64 = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    // Resize to 600px for even better stability during testing
+                    resizeImage(e.target.result, 600, (resized) => resolve(resized));
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
             });
-        };
-        reader.readAsDataURL(file);
-    });
+
+            console.log(`📤 Uploading image ${i + 1}/${validFiles.length}...`);
+            
+            // Standard dataURL to Blob conversion (more compatible than fetch)
+            const parts = base64.split(';base64,');
+            const contentType = parts[0].split(':')[1];
+            const raw = window.atob(parts[1]);
+            const rawLength = raw.length;
+            const uInt8Array = new Uint8Array(rawLength);
+            for (let j = 0; j < rawLength; ++j) {
+                uInt8Array[j] = raw.charCodeAt(j);
+            }
+            const blob = new Blob([uInt8Array], { type: contentType });
+            
+            const formData = new FormData();
+            formData.append('image', blob, `gallery_${Date.now()}.jpg`);
+
+            const res = await fetch(`${API_URL}/gallery`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${authToken}`
+                },
+                body: formData
+            });
+            
+            if (res.ok) {
+                const data = await res.json();
+                siteContent.galleryImages = data.galleryImages;
+                renderGallery(siteContent.galleryImages);
+            } else {
+                const errData = await res.json().catch(() => ({}));
+                alert(`รูปที่ ${i + 1} อัปโหลดไม่สำเร็จ: ` + (errData.error || res.statusText));
+            }
+        } catch (err) {
+            console.error('Gallery upload failed', err);
+            alert(`ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์เพื่ออัปโหลดรูปที่ ${i + 1} ได้`);
+            break; // Stop loop on connection error
+        }
+    }
 }
 
 function resizeImage(dataUrl, maxWidth, callback) {
@@ -412,10 +452,10 @@ function resizeImage(dataUrl, maxWidth, callback) {
     img.src = dataUrl;
 }
 
-window.deleteGalleryImage = async function(index) {
+window.deleteGalleryImage = async function(id) {
     if (!confirm('ยืนยันลบรูปภาพนี้?')) return;
     try {
-        const res = await fetch(`${API_URL}/gallery/${index}`, {
+        const res = await fetch(`${API_URL}/gallery/${id}`, {
             method: 'DELETE',
             headers: { 'Authorization': `Bearer ${authToken}` }
         });
@@ -423,9 +463,13 @@ window.deleteGalleryImage = async function(index) {
             const data = await res.json();
             siteContent.galleryImages = data.galleryImages;
             renderGallery(siteContent.galleryImages);
+        } else {
+            const err = await res.json();
+            alert('ลบรูปไม่สำเร็จ: ' + (err.error || 'Unknown error'));
         }
     } catch (err) {
         console.error('Failed to delete image', err);
+        alert('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
     }
 }
 
